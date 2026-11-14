@@ -9,5 +9,8 @@ import stretch from './stretch.js';
 import eightBit from './eightBit.js';
 import multiEye from './multiEye.js';
 import linesMeasure from './linesMeasure.js';
+import crt from './crt.js';
+import vhs from './vhs.js';
+import ntsc from './ntsc.js';
 
-export const EFFECTS = [lumaMesh, opticalFlow, dataMosh, feedback, softGlitch, hardGlitch, stretch, eightBit, multiEye, linesMeasure];
+export const EFFECTS = [lumaMesh, opticalFlow, dataMosh, feedback, softGlitch, hardGlitch, stretch, eightBit, multiEye, linesMeasure, crt, vhs, ntsc];

@@ -64,6 +64,34 @@ A standard grading suite applied to every frame **before** the chosen effect (so
 
 Every slider supports **+EQ** audio linking, and double-clicking a slider resets it. The switch on the effect panel turns the effect off so you can render with Global Effects only; clicking any effect card turns it back on. The Global Effects switch toggles the whole suite for quick before/after comparisons.
 
+## Analog video effects
+
+Three effect cards model the hardware instead of imitating the look:
+
+- **NTSC:** each scanline becomes a real composite signal sampled at four times the 3.58 MHz colour subcarrier. Colour is quadrature-modulated onto it, noise and ghosts are added to the signal, and a decoder (notch filter, comb filter, no filter, or S-Video) pulls luma and chroma apart again. Dot crawl, rainbow cross-colour and colour bleed come out of that math. Controls: luma and chroma bandwidth in MHz, colour, tint (phase error), cross-colour, ringing, dot crawl, snow, ghosting and ghost delay in microseconds, hue jitter, hum bar, 480 or 240 lines.
+- **VHS:** 3 MHz luma and 0.4 MHz colour-under chroma (both adjustable), chroma delay and vertical smear, the sharpness circuit's edge halos, luma and chroma noise, time-base jitter, wobble, top flagging, a tracking-error band you can position and roll, head-switching noise at the bottom, dropouts, tape speed (SP / LP / EP), copy generations, and a PLAY or REC on-screen display.
+- **CRT:** works in linear light. A Gaussian beam that widens with brightness draws the scanlines; aperture grille, slot mask or shadow mask phosphors; curvature, corner radius, overscan, convergence error, halation, phosphor persistence, flicker, interlace, V-hold roll, hum bar, glass glare and colour temperature.
+
+For the full chain, grade with Global Effects, run NTSC or VHS, render, then run the result through CRT.
+
+## Video Circuit (in Global Effects)
+
+A patchable chain of up to 6 analog stages, applied along every scanline after the global adjustments and before the effect. Time is real: one visible line is 52.6 µs, so component values set real time constants, and results do not change with render resolution. Each stage shows a readout (cutoff, resonant frequency and Q, diode forward voltage, and so on), can be patched into luma, RGB or chroma, has a wet/dry mix, and every slider supports +EQ.
+
+| Stage | Model |
+| --- | --- |
+| RC low-pass | R and C set the cutoff; exponential impulse response (smear to the right) |
+| CR high-pass | AC coupling capacitor; flat areas sag to the bias level |
+| RLC resonator | L, C, R set resonant frequency and Q; damped-sinusoid ringing, or two exponentials when overdamped |
+| Delay line + feedback | Echo train; negative feedback gives a comb filter |
+| Diode clipper | Shockley diode equation solved with Newton's method; 1N4148, 1N34A or red LED; symmetric or single diode |
+| Transistor pair | tanh transfer of a differential pair, optional inversion |
+| Rectifier / wavefolder | Folds signal that passes the rails |
+| Comparator | Hard key at a threshold |
+| Oscillator + multiplier | Free-running oscillator (in multiples of the 15.734 kHz line rate) ring-modulating, amplitude-modulating or mixing with the signal |
+
+Presets: Worn coax run, Ringing edges, Crispener, Overdriven amp, Video synth, Chroma comb, Hard key.
+
 ## Tracking effects
 
 Multi-Eye Multi-Mouth and Lines & Measurements use [MediaPipe Tasks Vision](https://ai.google.dev/edge/mediapipe/solutions/guide) (face, hand and pose landmarkers). The library lives in `vendor/mediapipe`; the models (about 17 MB total) download from Google's model host the first time you open one of these effects, then the browser caches them. Tracking runs on the device, and your video is never uploaded. Per Google's privacy notice, the library does send anonymous performance metrics to Google; the app tells users this next to those effects.
@@ -124,6 +152,7 @@ js/slice/main.js    Slice Pause: pauses, freeze shader, timeline, export
 css/slice.css       Slice Pause styles
 css/style.css       Styles
 js/global.js        Global Effects grading stage
+js/circuit.js       Video Circuit stages (component math, shader, presets)
 js/detect.js        Shared MediaPipe face/hand/pose tracker
 js/mobile.js        Phone helpers (iOS playback rules, wake lock, audio session)
 vendor/mediapipe/   MediaPipe Tasks Vision 1.2.2 (Apache-2.0)

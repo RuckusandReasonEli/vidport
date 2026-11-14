@@ -5,6 +5,7 @@ import { pickMime, bitrateFor, presentResult } from './export.js';
 import { IS_IOS, IS_MOBILE, keepAwake, waitForMetadata } from './mobile.js';
 import { GLOBAL, Grader, isNeutral } from './global.js';
 import { Tracker } from './detect.js';
+import { CIRCUIT_TYPES, CIRCUIT_PRESETS, MAX_STAGES, circuitType } from './circuit.js';
 
 const $ = s => document.querySelector(s);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -50,7 +51,13 @@ EFFECTS.forEach(fx => { state.params[fx.id] = defaultParams(fx); });
 state.params.global = defaultParams(GLOBAL);
 state.globalOn = true;
 state.fxOn = true;
-const globalParams = () => (state.globalOn ? resolve(GLOBAL) : null);
+state.circuit = [];   // Video Circuit stages: { uid, type, def, bypass }
+const globalParams = () => {
+  if (!state.globalOn) return null;
+  const p = resolve(GLOBAL);
+  p.circuit = state.circuit.filter(st => !st.bypass).map(st => ({ type: st.type.id, p: resolve(st.def) }));
+  return p;
+};
 
 function resolve(fx) {
   const st = state.params[fx.id], out = {};
@@ -255,11 +262,16 @@ function buildControls(container, def, grouped) {
   }
   return rows;
 }
-function afterChange(def) { if (def.id === 'global') updateBadge(); markDirty(); }
+function afterChange(def) {
+  if (def.id === 'global') updateBadge();
+  if (def.id.startsWith('circ')) updateCircuitReadouts();
+  markDirty();
+}
 
 function updateBadge() {
   const fx = getFx(state.selected);
-  const g = state.globalOn && !isNeutral(resolve(GLOBAL));
+  const gp = globalParams();
+  const g = !!gp && !isNeutral(gp);
   $('#effect-badge').textContent = state.fxOn ? fx.name + (g ? ' + Global' : '') : (g ? 'Global Effects only' : 'Original');
 }
 
@@ -272,11 +284,78 @@ function buildParams() {
   updateTrackStatus();
 }
 let globalRows = [];
+
+/* ---------- Video Circuit (inside Global Effects) ---------- */
+let circuitRows = [], circuitUid = 1;
+function addStage(typeId, overrides = {}) {
+  if (state.circuit.length >= MAX_STAGES) return null;
+  const type = circuitType(typeId);
+  const def = { id: 'circ' + circuitUid++, name: type.name, params: type.params };
+  state.params[def.id] = defaultParams(def);
+  Object.assign(state.params[def.id].values, overrides);
+  const st = { type, def, bypass: false };
+  state.circuit.push(st);
+  return st;
+}
+function removeStage(i) { const [st] = state.circuit.splice(i, 1); delete state.params[st.def.id]; }
+function clearCircuit() { while (state.circuit.length) removeStage(0); renderCircuit(); }
+function updateCircuitReadouts() {
+  state.circuit.forEach(st => { if (st.readout) st.readout.textContent = st.type.derive(state.params[st.def.id].values, 960).info; });
+}
+function renderCircuit() {
+  const box = $('#circuit-stages'), chain = $('#circuit-chain');
+  box.innerHTML = '';
+  circuitRows = [];
+  state.circuit.forEach((st, i) => {
+    const card = document.createElement('div');
+    card.className = 'stage' + (st.bypass ? ' bypassed' : '');
+    card.innerHTML = `
+      <div class="stage-head">
+        <div><b>${i + 1}. ${st.type.name}</b><span class="readout"></span></div>
+        <div class="stage-btns">
+          <button data-a="up" title="Move earlier" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button data-a="down" title="Move later" ${i === state.circuit.length - 1 ? 'disabled' : ''}>↓</button>
+          <button data-a="bypass" title="Bypass this stage">${st.bypass ? 'Off' : 'On'}</button>
+          <button data-a="remove" title="Remove this stage">✕</button>
+        </div>
+      </div>
+      <p class="stage-about">${st.type.about}</p>
+      <div class="params"></div>`;
+    st.readout = card.querySelector('.readout');
+    card.querySelector('.stage-btns').addEventListener('click', e => {
+      const a = e.target.dataset.a;
+      if (!a) return;
+      if (a === 'remove') removeStage(i);
+      else if (a === 'bypass') st.bypass = !st.bypass;
+      else { const j = a === 'up' ? i - 1 : i + 1; [state.circuit[i], state.circuit[j]] = [state.circuit[j], state.circuit[i]]; }
+      renderCircuit();
+    });
+    circuitRows.push([st.def, buildControls(card.querySelector('.params'), st.def, false)]);
+    box.appendChild(card);
+  });
+  chain.innerHTML = ['<span class="node io">IN</span>', ...state.circuit.map(st => `<span class="node${st.bypass ? ' off' : ''}">${st.type.chip}</span>`), '<span class="node io">OUT</span>'].join('<span class="wire"></span>');
+  $('#circuit-count').textContent = state.circuit.length ? `${state.circuit.length} stage${state.circuit.length === 1 ? '' : 's'}` : '';
+  $('#circuit-add').disabled = state.circuit.length >= MAX_STAGES;
+  updateCircuitReadouts();
+  refreshEqUsage(); updateBadge(); markDirty();
+}
+$('#circuit-add-type').innerHTML = CIRCUIT_TYPES.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+$('#circuit-add').addEventListener('click', () => { addStage($('#circuit-add-type').value); renderCircuit(); });
+$('#circuit-preset').innerHTML = '<option value="">Load a preset circuit...</option>' + CIRCUIT_PRESETS.map((p, i) => `<option value="${i}">${p.name}</option>`).join('');
+$('#circuit-preset').addEventListener('change', e => {
+  const preset = CIRCUIT_PRESETS[e.target.value];
+  e.target.value = '';
+  if (!preset) return;
+  while (state.circuit.length) removeStage(0);
+  preset.stages.forEach(([id, o]) => addStage(id, o));
+  renderCircuit();
+});
+$('#circuit-clear').addEventListener('click', clearCircuit);
 function buildGlobal() { globalRows = buildControls($('#global-params'), GLOBAL, true); updateBadge(); }
 
 function updateGhosts() {
   if (!state.audioOn) return;
-  for (const [def, rows] of [[getFx(state.selected), paramRows], [GLOBAL, globalRows]]) {
+  for (const [def, rows] of [[getFx(state.selected), paramRows], [GLOBAL, globalRows], ...circuitRows]) {
     const vals = resolve(def);
     for (const { p, ghost } of rows) ghost.style.left = ((vals[p.id] - p.min) / (p.max - p.min)) * 100 + '%';
   }
@@ -325,7 +404,7 @@ $('#global-toggle').addEventListener('change', e => {
   $('#global-block').classList.toggle('is-off', !state.globalOn);
   refreshEqUsage(); updateBadge(); markDirty();
 });
-$('#global-reset').addEventListener('click', () => { state.params.global = defaultParams(GLOBAL); buildGlobal(); markDirty(); });
+$('#global-reset').addEventListener('click', () => { state.params.global = defaultParams(GLOBAL); buildGlobal(); clearCircuit(); markDirty(); });
 
 /* ---------- EQ meters ---------- */
 const eqEl = $('#eq');
@@ -340,7 +419,7 @@ for (const b of BANDS) {
   eqFills[b.id] = el.querySelector('.eq-fill');
 }
 function refreshEqUsage() {
-  const used = new Set([...linkedBands(getFx(state.selected)), ...(state.globalOn ? linkedBands(GLOBAL) : [])]);
+  const used = new Set([...linkedBands(getFx(state.selected)), ...(state.globalOn ? [...linkedBands(GLOBAL), ...state.circuit.flatMap(st => [...linkedBands(st.def)])] : [])]);
   eqEl.querySelectorAll('.eq-band').forEach(el => el.classList.toggle('used', used.has(el.dataset.band)));
 }
 function updateMeters() {
@@ -726,6 +805,7 @@ async function finishExport(cancelled) {
 
 /* ---------- Boot ---------- */
 buildGlobal();
+renderCircuit();
 selectEffect(state.selected);
 refreshCardPills();
 refreshEqUsage();

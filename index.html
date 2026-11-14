@@ -121,6 +121,20 @@
           </label>
         </div>
         <div id="global-params"></div>
+        <details class="group" id="circuit-group">
+          <summary>Video Circuit <span class="muted small" id="circuit-count"></span></summary>
+          <p class="hint">Patch up to 6 analog stages in series. Each one is solved from its component values along every scanline (one line = 52.6 µs), after the adjustments above and before the effect.</p>
+          <div class="chain" id="circuit-chain"></div>
+          <div id="circuit-stages"></div>
+          <div class="row circuit-add">
+            <select id="circuit-add-type" aria-label="Stage type"></select>
+            <button class="btn btn-sm" id="circuit-add">+ Add stage</button>
+          </div>
+          <div class="row circuit-add">
+            <select id="circuit-preset" aria-label="Preset circuits"></select>
+            <button class="btn btn-ghost btn-sm" id="circuit-clear">Clear</button>
+          </div>
+        </details>
         <div class="head-actions fx-actions"><button class="btn btn-ghost btn-sm" id="global-reset">Reset all</button></div>
       </section>
 

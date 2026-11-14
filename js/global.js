@@ -1,6 +1,7 @@
 // Global Effects: a standard grading/editing stage applied to every frame
 // BEFORE the selected effect (so motion-based effects see the graded image too).
 import { FS_IO } from './gl.js';
+import { CircuitRunner } from './circuit.js';
 
 const BLUR_FS = FS_IO + /* glsl */ `
 uniform sampler2D uTex; uniform vec2 uDir;
@@ -118,6 +119,10 @@ const DEFAULTS = Object.fromEntries(GLOBAL.params.map(p => [p.id, p.value]));
 const NEUTRAL_IGNORED = new Set(['overlayColor', 'overlayMode', 'vigSize']); // only matter when their amount is on
 
 export function isNeutral(p) {
+  if (p.circuit && p.circuit.length) return false;
+  return gradeNeutral(p);
+}
+function gradeNeutral(p) {
   for (const k in DEFAULTS) {
     if (NEUTRAL_IGNORED.has(k)) continue;
     if (Math.abs((p[k] ?? DEFAULTS[k]) - DEFAULTS[k]) > 1e-4) return false;
@@ -130,6 +135,7 @@ export class Grader {
     this.r = r;
     this.blurProg = r.fx(BLUR_FS);
     this.gradeProg = r.fx(GRADE_FS);
+    this.circuit = new CircuitRunner(r);
     this.targets = {};
   }
   t(key, w, h) {
@@ -138,9 +144,18 @@ export class Grader {
     if (t) t.dispose();
     return (this.targets[key] = this.r.createTarget(w, h));
   }
+  /** Grade first, then run the Video Circuit chain on the graded picture. */
   apply(raw, out, p) {
     const r = this.r;
     if (!p || isNeutral(p)) { r.blit(raw, out); return; }
+    const stages = p.circuit || [];
+    if (!stages.length) { this.grade(raw, out, p); return; }
+    let src = raw;
+    if (!gradeNeutral(p)) { src = this.t('cg', r.w, r.h); this.grade(raw, src, p); }
+    this.circuit.run(src, out, stages);
+  }
+  grade(raw, out, p) {
+    const r = this.r;
     const sc = r.h / 720;
     let base = raw;
     if (p.blur > 0.05) {
