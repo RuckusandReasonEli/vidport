@@ -1,6 +1,6 @@
 # Ruckus & Reason Video Portal
 
-Live at https://ruckusandreasoneli.github.io/moshpit/
+Live at https://ruckusandreasoneli.github.io/vidport/
 
 In-browser video effects. Upload a clip, watch every effect preview live on a 3 second loop of your footage, link any parameter to the soundtrack's EQ, then render the full video and it downloads automatically. Nothing is uploaded to a server: decoding, effects (WebGL2 shaders) and encoding (MediaRecorder) all happen on the user's machine.
 
@@ -136,18 +136,18 @@ Output is MP4 where the browser can record it (Chrome 126+, Edge, Safari) and We
 
 ## Host it on GitHub Pages
 
-1. Create a new repository on GitHub (for example `moshpit`).
+1. Create a new repository on GitHub (for example `vidport`).
 2. Upload the contents of this folder to the repository root (`index.html` must be at the top level).
 3. In the repository go to **Settings > Pages**, set **Source** to "Deploy from a branch", branch `main`, folder `/ (root)`, and save.
-4. After a minute the site is live at `https://YOUR-USERNAME.github.io/moshpit/`.
+4. After a minute the site is live at `https://YOUR-USERNAME.github.io/vidport/`.
 
 Or from a terminal:
 
 ```bash
-cd moshpit
+cd vidport
 git init && git add . && git commit -m "Ruckus & Reason Video Portal"
 git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/moshpit.git
+git remote add origin https://github.com/YOUR-USERNAME/vidport.git
 git push -u origin main
 ```
 
