@@ -21,3 +21,8 @@ export function waitForMetadata(media) {
     media.addEventListener('error', () => rej(new Error('decode')), { once: true });
   });
 }
+
+// Keep the app's files fresh after each deploy (see sw.js).
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register(new URL('../sw.js', import.meta.url)).catch(() => {});
+}
