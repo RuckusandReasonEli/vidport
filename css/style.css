@@ -285,3 +285,6 @@ body.exporting .gallery, body.exporting .transport { opacity: 0.4; pointer-event
 .circuit-add { display: flex; gap: 8px; margin-top: 8px; }
 .circuit-add select { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: 13px; }
 @media (max-width: 760px) { .stage-btns button { min-width: 34px; height: 32px; } .circuit-add select { font-size: 16px; } }
+
+.inline-link { color: var(--accent-2); }
+@media (max-width: 760px) { .modes a { padding: 7px 4px; font-size: 12px; white-space: nowrap; } }

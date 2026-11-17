@@ -132,7 +132,7 @@ function updateTracking(force) {
 function trackCtx() {
   const gp = globalParams();
   const z = gp ? gp.zoom : 1;
-  return { track: lastTrack, hit: state.hasAudio === true ? audio.levels.hit : 0, srcW: video.videoWidth / z, srcH: video.videoHeight / z };
+  return { tracker, track: lastTrack, hit: state.hasAudio === true ? audio.levels.hit : 0, srcW: video.videoWidth / z, srcH: video.videoHeight / z };
 }
 tracker.onChange = () => { updateTrackStatus(); markDirty(); };
 function updateTrackStatus() {
@@ -174,6 +174,9 @@ for (const fx of EFFECTS) {
 }
 let galleryVisible = true;
 new IntersectionObserver(entries => { galleryVisible = entries[0].isIntersecting; }, { threshold: 0.01 }).observe(gallery);
+// Only cards actually on screen render their live preview (16+ effects is a lot of GPU work).
+const cardIO = new IntersectionObserver(entries => { for (const e of entries) e.target.dataset.onscreen = e.isIntersecting ? '1' : ''; }, { rootMargin: '120px' });
+for (const c of cards.values()) { c.el.dataset.onscreen = '1'; cardIO.observe(c.el); }
 
 function refreshCardPills() {
   for (const fx of EFFECTS) cards.get(fx.id).el.classList.toggle('has-links', linkedBands(fx).size > 0);
@@ -616,6 +619,7 @@ function renderPreview(step, dt) {
     if (step) galR.upload(video, video.videoWidth, video.videoHeight);
     else galR.regrade();
     for (const g of EFFECTS) {
+      if (!cards.get(g.id).el.dataset.onscreen) continue;
       instance(galInst, galR, g).render(resolve(g), ctx, null);
       cards.get(g.id).ctx2d.drawImage(galR.canvas, 0, 0);
     }

@@ -27,5 +27,5 @@ body.mode-beat .free-only { display: none !important; }
 @media (max-width: 760px) {
   .strip-picker { height: 96px; }
   .pause-editor .field input { font-size: 16px; }
-  .modes a { padding: 7px 8px; font-size: 12.5px; }
+  .modes a { padding: 7px 4px; font-size: 12px; white-space: nowrap; }
 }

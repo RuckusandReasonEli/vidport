@@ -12,5 +12,6 @@ import linesMeasure from './linesMeasure.js';
 import crt from './crt.js';
 import vhs from './vhs.js';
 import ntsc from './ntsc.js';
+import { scribbleThick, scribbleLines, scribbleSwirl } from './scribble.js';
 
-export const EFFECTS = [lumaMesh, opticalFlow, dataMosh, feedback, softGlitch, hardGlitch, stretch, eightBit, multiEye, linesMeasure, crt, vhs, ntsc];
+export const EFFECTS = [lumaMesh, opticalFlow, dataMosh, feedback, softGlitch, hardGlitch, stretch, eightBit, multiEye, linesMeasure, crt, vhs, ntsc, scribbleThick, scribbleLines, scribbleSwirl];

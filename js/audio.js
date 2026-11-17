@@ -56,6 +56,23 @@ export class AudioEngine {
     this.src.connect(this.recordDest);
   }
 
+  /** Analyse an existing audio node (e.g. a mix bus) instead of one media element. */
+  attachNode(ctx, node) {
+    if (this.analyser) return;
+    this.ctx = ctx;
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = 4096;
+    this.analyser.smoothingTimeConstant = 0;
+    this.analyser.minDecibels = -110;
+    this.analyser.maxDecibels = -5;
+    this.freq = new Float32Array(this.analyser.frequencyBinCount);
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    node.connect(this.analyser);
+    this.analyser.connect(sink);
+    sink.connect(ctx.destination);
+  }
+
   get recordTrack() { return this.recordDest ? this.recordDest.stream.getAudioTracks()[0] : null; }
 
   async resume() { if (this.ctx && this.ctx.state !== 'running') { try { await this.ctx.resume(); } catch (e) { /* needs a gesture */ } } }

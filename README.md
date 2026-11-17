@@ -7,6 +7,7 @@ In-browser video effects. Upload a clip, watch every effect preview live on a 3 
 Two tools, switchable from the header:
 
 - **Effects** (`index.html`): one clip through glitch, mosh and feedback effects, with audio-reactive EQ linking.
+- **Layers** (`layers.html`): three tracks of video with split, trim and a separate effect on every clip.
 - **Beat Cut** (`cut.html`): up to 5 clips edited together on the beat.
 - **Slice Pause** (`slice.html`): cut one clip into strips and freeze chosen strips on the beat.
 
@@ -50,6 +51,9 @@ Two tools, switchable from the header:
 | Stretch | Smears everything past a line, with wave and jaggies, in 4 directions |
 | 8-Bit | Pixelation, Bayer dithering and 3 CGA palettes |
 | Multi-Eye Multi-Mouth | Finds eyes and/or mouths with face tracking and scatters feathered copies around the frame. Set how many of each, size, drift, spin, and how many jump to new spots on each bass hit (or on a timer for silent clips) |
+| Scribble: Thick | Body segmentation masks each person; brushy contour strokes follow the silhouette at set distances, with a solid fill behind the body, dry-brush texture and wobble |
+| Scribble: Lines | Random, intersecting straight strokes scattered in a band around the body, with optional double strokes and a draw-on pulse |
+| Scribble: Swirls | Small cursive loops or spirals that travel along the body's outline |
 | Lines & Measurements | Motion-tracking overlay: eyes, nose, mouth, chin, fingertips, knuckles, shoulders, elbows, wrists, hips, knees and ankles, plus high-contrast "sharp points", linked by skeleton / nearest / web / chain lines with pixel distances, coordinates, random codes or a mix, tracker brackets and a HUD |
 
 ## Global Effects
@@ -63,6 +67,18 @@ A standard grading suite applied to every frame **before** the chosen effect (so
 - **Lens & Frame:** Vignette, Vignette Size, Zoom (crop), Flip
 
 Every slider supports **+EQ** audio linking, and double-clicking a slider resets it. The switch on the effect panel turns the effect off so you can render with Global Effects only; clicking any effect card turns it back on. The Global Effects switch toggles the whole suite for quick before/after comparisons.
+
+## Layers
+
+The multi-clip version of Effects.
+
+- **Media:** add up to 8 videos. The first three land on layers 1, 2 and 3; later ones extend layer 1. Each media card can add the video to any layer at the playhead.
+- **Timeline:** 3 layers (layer 3 on top). Drag clips to move them, including onto another layer; drag their edges to trim. Clips on a layer can't overlap. Snap lines clips up with each other and the playhead. **Split** (S) cuts the selected clip at the playhead, **Duplicate** (D), **Delete**. Each layer can be hidden or muted.
+- **Per clip:** opacity, blend mode (Normal, Screen, Add, Multiply, Difference, Overlay, Lighten, Darken), fill or fit, scale, position, rotation, fade in and out, volume; any effect from the gallery with its full controls; and the Global Effects adjustments. Splitting keeps all settings, so you can split a clip and give each half a different effect.
+- **Audio:** every clip's sound is mixed; audio reactivity listens to the mix, and every slider has +EQ.
+- **Render:** the whole timeline in real time with the mixed audio, at 480p to 1080p in the chosen frame (match first video, 16:9, 9:16, 1:1, 4:5).
+
+Browser limits it is designed around: at most 3 videos decode at once (one per layer; a split clip keeps using the same decoder, so cuts within one file are seamless), 8 source files and 40 clips per project. Previews run at 640 px (480 px on phones) while renders use the chosen size. Face, hand and body tracking on several layers takes turns, one layer per frame. Video Circuit stages are available on the Effects page only. Projects are not saved between visits, because browsers can't keep the video files.
 
 ## Analog video effects
 
@@ -91,6 +107,12 @@ A patchable chain of up to 6 analog stages, applied along every scanline after t
 | Oscillator + multiplier | Free-running oscillator (in multiples of the 15.734 kHz line rate) ring-modulating, amplitude-modulating or mixing with the signal |
 
 Presets: Worn coax run, Ringing edges, Crispener, Overdriven amp, Video synth, Chroma comb, Hard key.
+
+## Scribble controls
+
+All three share: three colors and how they're used (cycle, first only, random); **Boil**, how many times a second the marks are redrawn (8 to 12 gives a hand-animated stop-motion look, 0 is smooth); **Hand Wobble**; **Motion Speed** (flowing, rotating or crawling marks); background (original, paper color, dimmed, black); body look (original, posterized, cool contrast, duotone); and whether the marks sit behind the body or over everything. Each style adds its own: stroke count, spacing, width, fill and dry brush for Thick; number, spread, length, width and double strokes for Lines; shape, number, loop size and length for Swirls.
+
+Body masks come from MediaPipe's selfie segmenter (about 250 KB, downloaded the first time a Scribble effect is opened).
 
 ## Tracking effects
 
@@ -153,7 +175,10 @@ css/slice.css       Slice Pause styles
 css/style.css       Styles
 js/global.js        Global Effects grading stage
 js/circuit.js       Video Circuit stages (component math, shader, presets)
-js/detect.js        Shared MediaPipe face/hand/pose tracker
+js/detect.js        Shared MediaPipe face/hand/pose tracker and body segmenter
+layers.html         Layers tool
+js/layers/main.js   Layers: media, players, timeline editing, per-layer views, compositing, export
+css/layers.css      Layers styles
 js/mobile.js        Phone helpers (iOS playback rules, wake lock, audio session)
 vendor/mediapipe/   MediaPipe Tasks Vision 1.2.2 (Apache-2.0)
 js/main.js          App wiring: upload, playback loop, gallery, params, export

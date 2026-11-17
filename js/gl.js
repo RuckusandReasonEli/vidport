@@ -270,6 +270,27 @@ export class Renderer {
   }
   /** Re-run the grading stage on the latest frame (used when paused and a global slider moves). */
   regrade() { if (this.grader && this.hasFrame) this.grader.apply(this.raw, this.frames[this.fi], this.gradeParams); }
+  /**
+   * A layer view: shares this GL context (programs, VAO) but has its own frame
+   * history and draws "to screen" into its own output target. Effects created
+   * on a view behave exactly as they do on the main canvas.
+   */
+  view() {
+    const v = Object.create(this);
+    Object.assign(v, { srcTex: this._makeTex(), frames: [null, null], fi: 0, raw: null, out: null, hasFrame: false,
+      w: 0, h: 0, time: 0, frameIndex: 0, grader: null, gradeParams: null, _body: null });
+    v.resize = function (w, h) {
+      if (w === this.w && h === this.h) return;
+      this.w = w; this.h = h;
+      [...this.frames, this.raw, this.out].forEach(t => t && t.dispose());
+      this.frames = [this.createTarget(w, h), this.createTarget(w, h)];
+      this.raw = this.createTarget(w, h);
+      this.out = this.createTarget(w, h);
+      this.hasFrame = false;
+    };
+    v.bindTarget = function (target) { return Renderer.prototype.bindTarget.call(this, target || this.out); };
+    return v;
+  }
   get cur() { return this.frames[this.fi]; }
   get prev() { return this.frames[this.fi ^ 1]; }
 
