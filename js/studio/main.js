@@ -1,6 +1,7 @@
 import { Renderer, FS_IO } from '../gl.js';
 import { EFFECTS } from '../effects/index.js';
 import { GLOBAL, Grader, isNeutral } from '../global.js';
+import { bodyField } from '../effects/scribble.js';
 import { CIRCUIT_TYPES, CIRCUIT_PRESETS, MAX_STAGES, circuitType } from '../circuit.js';
 import { AudioEngine, BANDS } from '../audio.js';
 import { Tracker } from '../detect.js';
@@ -41,17 +42,28 @@ const selected = () => clips.find(c => c.id === selectedId) || null;
 
 /* Layer look controls (per clip) */
 const LOOK = { id: 'look', params: [
-  { id: 'opacity', label: 'Opacity', min: 0, max: 1, step: 0.01, value: 1 },
-  { id: 'blend', label: 'Blend Mode', type: 'select', options: BLENDS, value: 0 },
-  { id: 'fit', label: 'Fit', type: 'select', options: ['Fill frame (crop)', 'Fit inside'], value: 0 },
-  { id: 'scale', label: 'Scale', min: 0.1, max: 3, step: 0.01, value: 1 },
-  { id: 'x', label: 'Position X', min: -1, max: 1, step: 0.005, value: 0 },
-  { id: 'y', label: 'Position Y', min: -1, max: 1, step: 0.005, value: 0 },
-  { id: 'rotate', label: 'Rotation', min: -180, max: 180, step: 1, value: 0 },
-  { id: 'fadeIn', label: 'Fade In (s)', min: 0, max: 5, step: 0.05, value: 0 },
-  { id: 'fadeOut', label: 'Fade Out (s)', min: 0, max: 5, step: 0.05, value: 0 },
-  { id: 'volume', label: 'Clip Volume', min: 0, max: 1.5, step: 0.01, value: 1 },
+  { group: 'Layer look', id: 'opacity', label: 'Opacity', min: 0, max: 1, step: 0.01, value: 1 },
+  { group: 'Layer look', id: 'blend', label: 'Blend Mode', type: 'select', options: BLENDS, value: 0 },
+  { group: 'Layer look', id: 'fit', label: 'Fit', type: 'select', options: ['Fill frame (crop)', 'Fit inside'], value: 0 },
+  { group: 'Layer look', id: 'scale', label: 'Scale', min: 0.1, max: 3, step: 0.01, value: 1 },
+  { group: 'Layer look', id: 'x', label: 'Position X', min: -1, max: 1, step: 0.005, value: 0 },
+  { group: 'Layer look', id: 'y', label: 'Position Y', min: -1, max: 1, step: 0.005, value: 0 },
+  { group: 'Layer look', id: 'rotate', label: 'Rotation', min: -180, max: 180, step: 1, value: 0 },
+  { group: 'Layer look', id: 'fadeIn', label: 'Fade In (s)', min: 0, max: 5, step: 0.05, value: 0 },
+  { group: 'Layer look', id: 'fadeOut', label: 'Fade Out (s)', min: 0, max: 5, step: 0.05, value: 0 },
+  { group: 'Layer look', id: 'volume', label: 'Clip Volume', min: 0, max: 1.5, step: 0.01, value: 1 },
+  { group: 'Zoom & crop', id: 'zoom', label: 'Zoom', min: 1, max: 6, step: 0.01, value: 1 },
+  { group: 'Zoom & crop', id: 'panX', label: 'Zoom Pan X', min: -1, max: 1, step: 0.005, value: 0 },
+  { group: 'Zoom & crop', id: 'panY', label: 'Zoom Pan Y', min: -1, max: 1, step: 0.005, value: 0 },
+  { group: 'Zoom & crop', id: 'cropL', label: 'Crop Left', min: 0, max: 0.45, step: 0.005, value: 0 },
+  { group: 'Zoom & crop', id: 'cropR', label: 'Crop Right', min: 0, max: 0.45, step: 0.005, value: 0 },
+  { group: 'Zoom & crop', id: 'cropT', label: 'Crop Top', min: 0, max: 0.45, step: 0.005, value: 0 },
+  { group: 'Zoom & crop', id: 'cropB', label: 'Crop Bottom', min: 0, max: 0.45, step: 0.005, value: 0 },
+  { group: 'Mask', id: 'mask', label: 'Mask', type: 'select', options: ['Off', 'Keep people (remove background)', 'Remove people (keep background)'], value: 0 },
+  { group: 'Mask', id: 'maskEdge', label: 'Edge (shrink / grow)', min: -0.4, max: 0.4, step: 0.01, value: 0.05 },
+  { group: 'Mask', id: 'maskFeather', label: 'Edge Softness', min: 0.01, max: 0.4, step: 0.01, value: 0.08 },
 ] };
+const maskOn = c => c && Math.round(c.look.values.mask) > 0;
 const defaults = def => {
   const values = {}, mods = {};
   for (const p of def.params) { values[p.id] = p.value; if (isRange(p)) mods[p.id] = p.mod ? { ...p.mod } : { band: 'none', depth: 0.5 }; }
@@ -127,9 +139,12 @@ function setGain(p, g) {
 const canvas = $('#main-canvas');
 const R = new Renderer(canvas, { preserve: IS_IOS });
 const COMP_FS = FS_IO + /* glsl */ `
-uniform sampler2D uAccum, uLayer;
+uniform sampler2D uAccum, uLayer, uMask;
 uniform vec2 uCenter, uSize;
 uniform float uOpacity, uBlend, uRot;
+uniform vec4 uCrop;    // crop window in source UV: x0, y0, width, height
+uniform vec3 uZoom;    // zoom, pan x, pan y (inside the crop window)
+uniform vec3 uMaskP;   // mode (0 off, 1 keep people, 2 remove people), edge, softness
 void main() {
   vec3 a = texture(uAccum, vUv).rgb;
   float asp = uRes.x / uRes.y;
@@ -138,7 +153,14 @@ void main() {
   q = mat2(c, -s, s, c) * q; q.x /= asp;
   vec2 luv = q / uSize + 0.5;
   if (luv.x < 0.0 || luv.x > 1.0 || luv.y < 0.0 || luv.y > 1.0) { outColor = vec4(a, 1.0); return; }
-  vec3 l = texture(uLayer, luv).rgb, b;
+  vec2 zc = vec2(0.5) + uZoom.yz * 0.5 * (1.0 - 1.0 / uZoom.x);
+  vec2 suv = uCrop.xy + (zc + (luv - 0.5) / uZoom.x) * uCrop.zw;
+  vec3 l = texture(uLayer, suv).rgb, b;
+  float alpha = 1.0;
+  if (uMaskP.x > 0.5) {
+    float m = smoothstep(0.5 - uMaskP.y - uMaskP.z, 0.5 - uMaskP.y + uMaskP.z, texture(uMask, suv).r);
+    alpha = uMaskP.x < 1.5 ? m : 1.0 - m;
+  }
   if (uBlend < 0.5) b = l;
   else if (uBlend < 1.5) b = 1.0 - (1.0 - a) * (1.0 - l);
   else if (uBlend < 2.5) b = min(a + l, 1.0);
@@ -147,22 +169,48 @@ void main() {
   else if (uBlend < 5.5) b = mix(2.0 * a * l, 1.0 - 2.0 * (1.0 - a) * (1.0 - l), step(0.5, a));
   else if (uBlend < 6.5) b = max(a, l);
   else b = min(a, l);
-  outColor = vec4(mix(a, b, uOpacity), 1.0);
+  outColor = vec4(mix(a, b, uOpacity * alpha), 1.0);
 }`;
 const compProg = R.fx(COMP_FS);
+const blankMask = (() => { const gl = R.gl, tx = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tx); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255])); return tx; })();
 let accum = null;
 const views = tracks.map(() => { const v = R.view(); v.grader = new Grader(v); return v; });
-const trackState = tracks.map(() => ({ clipId: null, tex: null, track: { faces: [], hands: [], poses: [], fresh: false }, frame: 0 }));
+const trackState = tracks.map(() => ({ clipId: null, tex: null, mask: null, track: { faces: [], hands: [], poses: [], fresh: false }, frame: 0 }));
 const instances = new Map();   // `${clipId}|${track}|${fxId}` -> effect instance
 const tracker = new Tracker();
-tracker.onChange = () => { updateTrackStatus(); dirty = true; };
+tracker.onChange = () => { updateTrackStatus(); updateMaskStatus(); dirty = true; };
 window.videoPortalTracker = tracker;
 
-function projectAspect() {
-  if (aspectSetting !== 'auto') return +aspectSetting;
-  const c = [...clips].sort((a, b) => a.track - b.track || a.start - b.start)[0];
-  const m = c ? media.find(x => x.id === c.mediaId) : media[0];
-  return m ? m.w / m.h : 16 / 9;
+/** Project frame in pixels: from the first imported video unless overridden. */
+let customW = 1080, customH = 1920;
+function projectFrame() {
+  if (aspectSetting === 'custom') return [customW, customH];
+  if (aspectSetting === 'auto') return media[0] ? [media[0].w, media[0].h] : [1920, 1080];
+  const a = +aspectSetting;
+  return a >= 1 ? [1920, Math.round(1920 / a)] : [Math.round(1920 * a), 1920];
+}
+function projectAspect() { const [w, h] = projectFrame(); return w / h; }
+const RATIOS = [[16, 9], [9, 16], [1, 1], [4, 5], [5, 4], [4, 3], [3, 4], [21, 9], [2, 1], [3, 2], [2, 3]];
+function ratioName(w, h) {
+  const r = RATIOS.find(([a, b]) => Math.abs(w / h - a / b) < 0.012);
+  return r ? `${r[0]}:${r[1]}` : (w / h).toFixed(2) + ':1';
+}
+function updateFrameUI() {
+  const m = media[0];
+  const opt = $('#aspect option[value="auto"]');
+  opt.textContent = m ? `From video: ${m.w}x${m.h} (${ratioName(m.w, m.h)})` : 'From first video';
+  $('#custom-size').hidden = aspectSetting !== 'custom';
+  $('#ex-res').disabled = aspectSetting === 'custom';
+  const [w, h] = exportSize();
+  $('#frame-note').textContent = media.length ? `Output: ${w}x${h} (${ratioName(w, h)})${aspectSetting === 'auto' && m ? `, detected from ${m.name}` : ''}.` : '';
+}
+function exportSize() {
+  if (aspectSetting === 'custom') return [Math.round(customW / 2) * 2, Math.round(customH / 2) * 2];
+  const [fw, fh] = projectFrame(), a = fw / fh, res = $('#ex-res').value;
+  let w, h;
+  if (res === 'source') { const s = Math.min(1, 1920 / Math.max(fw, fh)); [w, h] = [fw * s, fh * s]; }
+  else { const short = +res; [w, h] = a >= 1 ? [short * a, short] : [short, short / a]; }
+  return [Math.max(2, Math.round(w / 2) * 2), Math.max(2, Math.round(h / 2) * 2)];
 }
 function sizeFor(longSide) {
   const a = projectAspect();
@@ -230,6 +278,7 @@ function fadeAt(c, look, time) {
 }
 
 function neededKinds(c) { const fx = fxOf(c); return fx && fx.needs ? fx.needs(resolve(fx, fxState(c, fx.id))) : []; }
+function updateMaskStatus() { const c = selected(); const el = $('#mask-status'); el.hidden = !maskOn(c); if (maskOn(c)) el.textContent = tracker.statusText(['seg']); }
 function mapTrack(raw, gp) {
   const flip = gp ? Math.round(gp.flip) : 0, z = gp ? gp.zoom : 1;
   const map = (l, vis) => { let x = (l.x - 0.5) * z + 0.5, y = (1 - l.y - 0.5) * z + 0.5; if (flip === 1 || flip === 3) x = 1 - x; if (flip === 2 || flip === 3) y = 1 - y; return { x, y, v: vis ? l.visibility : 1 }; };
@@ -261,6 +310,11 @@ function renderTrack(k, time, force) {
   const gp = clipGlobal(c);
   view.time = mt; view.frameIndex = ++ts.frame; view.gradeParams = gp;
   if (step || !view.hasFrame) view.upload(v, v.videoWidth, v.videoHeight); else view.regrade();
+  ts.mask = null;
+  if (maskOn(c)) {
+    tracker.ensure(['seg']);
+    if (tracker.tasks.seg) ts.mask = bodyField(view, tracker).tex;
+  }
   const fx = fxOf(c);
   if (!fx) { ts.tex = view.cur; return; }
   const key = `${c.id}|${k}|${fx.id}`;
@@ -287,7 +341,8 @@ function composite(time) {
     const c = activeClip(k, time);
     if (!ts.tex || !c || ts.clipId !== c.id || tracks[k].hidden) continue;
     const look = resolve(LOOK, c.look);
-    const la = views[k].w / views[k].h;
+    const cw = Math.max(0.05, 1 - look.cropL - look.cropR), ch = Math.max(0.05, 1 - look.cropT - look.cropB);
+    const la = (views[k].w * cw) / (views[k].h * ch);
     let sw = 1, sh = 1;
     const cover = Math.round(look.fit) === 0;
     if ((la > oa) === cover) sh = cover ? 1 : oa / la, sw = cover ? la / oa : 1;
@@ -295,7 +350,9 @@ function composite(time) {
     R.pass(compProg, accum.write, {
       uCenter: [0.5 + look.x * 0.5, 0.5 + look.y * 0.5], uSize: [sw * look.scale, sh * look.scale],
       uOpacity: look.opacity * fadeAt(c, look, time), uBlend: look.blend, uRot: -look.rotate * Math.PI / 180,
-    }, { uAccum: accum.read, uLayer: ts.tex });
+      uCrop: [look.cropL, look.cropB, cw, ch], uZoom: [look.zoom, look.panX, look.panY],
+      uMaskP: [ts.mask ? Math.round(look.mask) : 0, look.maskEdge, look.maskFeather],
+    }, { uAccum: accum.read, uLayer: ts.tex, uMask: ts.mask || blankMask });
     accum.swap();
   }
   R.blit(accum.read, null);
@@ -385,6 +442,7 @@ async function addFiles(files) {
     Object.assign(probe, { muted: true, playsInline: true, preload: 'auto', src: url });
     try { await waitForMetadata(probe); } catch (e) { alert(`This browser can't decode ${f.name}. Try an H.264 MP4 or WebM.`); URL.revokeObjectURL(url); continue; }
     const m = { id: nextId++, file: f, url, name: f.name, duration: probe.duration || 1, w: probe.videoWidth || 1280, h: probe.videoHeight || 720, thumb: null };
+    if (!media.length) { aspectSetting = 'auto'; $('#aspect').value = 'auto'; $('#ex-res').value = 'source'; }
     media.push(m);
     makeThumb(m, probe);
     // Auto-place: first three files go to layers 1, 2, 3; later ones extend layer 1.
@@ -423,6 +481,7 @@ function afterMediaChange() {
   $('#export-btn').disabled = !clips.length;
   $('#render-jump').hidden = !clips.length;
   if (!exportJob) sizeOutput(...sizeFor(PREVIEW_LONG));
+  updateFrameUI();
   renderMedia(); renderTimeline(); renderInspector();
   galKey = '';
   $('#media-count').textContent = `${media.length} of ${MAX_MEDIA} videos. Add one to a layer at the playhead.`;
@@ -650,6 +709,7 @@ document.addEventListener('keydown', e => {
 });
 
 /* ---------- Inspector ---------- */
+const openGroups = new Set();   // keep sections open while switching clips
 const bandOptions = `<option value="none">Off</option>` + BANDS.map(b => `<option value="${b.id}">${b.label} (${b.range})</option>`).join('');
 const fmtVal = (p, v) => (p.step >= 1 ? Math.round(v) : (+v).toFixed(p.step < 0.01 ? 3 : 2));
 function buildControls(container, def, st, grouped) {
@@ -660,7 +720,8 @@ function buildControls(container, def, st, grouped) {
       group = p.group;
       const det = document.createElement('details');
       det.className = 'group';
-      det.open = group === 'Light';
+      det.open = group === 'Light' || openGroups.has(def.id + '|' + group);
+      det.addEventListener('toggle', () => { const k = def.id + '|' + group; if (det.open) openGroups.add(k); else openGroups.delete(k); });
       det.innerHTML = `<summary>${group}</summary><div class="params"></div>`;
       container.appendChild(det);
       parent = det.querySelector('.params');
@@ -711,7 +772,7 @@ function buildControls(container, def, st, grouped) {
 }
 function changed(def) {
   dirty = true;
-  if (def === LOOK) renderTimeline();
+  if (def === LOOK) { renderTimeline(); updateMaskStatus(); }
   else if (def === GLOBAL) updateBadge();
   else if (def.id && def.id.startsWith('circ')) updateCircuitReadouts();
   else updateTrackStatus();
@@ -730,8 +791,8 @@ function renderInspector() {
   $('#clip-title').textContent = c ? (clips.length > 1 ? `Layer ${c.track + 1}: ${m.name}` : m.name) : 'No clip selected';
   $('#clip-sub').textContent = c ? `${fmt(c.start)} to ${fmt(clipEnd(c))} on the timeline, using ${fmt(c.in)} to ${fmt(c.out)} of the source.`
     : clips.length ? 'Tap a clip on the timeline to edit it.' : 'Add a video to get started.';
-  $('#look-group').hidden = !c;
-  if (c) buildControls($('#clip-look'), LOOK, c.look, false);
+  if (c) buildControls($('#clip-look'), LOOK, c.look, true); else $('#clip-look').innerHTML = '';
+  updateMaskStatus();
   const fx = c && c.effect !== 'none' ? getFx(c.effect) : null;
   $('#fx-name').textContent = fx ? fx.name : 'Effect';
   $('#fx-desc').textContent = fx ? fx.description : c ? 'No effect on this clip yet. Choose a card in the gallery to apply one.' : 'Select a clip, then choose an effect card.';
@@ -968,7 +1029,15 @@ rangeIn.oninput = () => { audio.range = +rangeIn.value; $('#audio-range-val').te
 smoothIn.oninput = () => { audio.smoothing = +smoothIn.value; $('#audio-smooth-val').textContent = Math.round(smoothIn.value * 100) + '%'; setFill(smoothIn); };
 $('#audio-agc').onchange = e => { audio.autoGain = e.target.checked; audio.peak = {}; };
 setFill(rangeIn); setFill(smoothIn);
-$('#aspect').onchange = e => { aspectSetting = e.target.value; if (!exportJob) sizeOutput(...sizeFor(PREVIEW_LONG)); };
+$('#aspect').onchange = e => { aspectSetting = e.target.value; if (!exportJob) sizeOutput(...sizeFor(PREVIEW_LONG)); updateFrameUI(); };
+$('#ex-res').addEventListener('change', updateFrameUI);
+for (const id of ['custom-w', 'custom-h']) $('#' + id).onchange = () => {
+  customW = clamp(Math.round((+$('#custom-w').value || 1080) / 2) * 2, 16, 3840);
+  customH = clamp(Math.round((+$('#custom-h').value || 1920) / 2) * 2, 16, 3840);
+  $('#custom-w').value = customW; $('#custom-h').value = customH;
+  if (!exportJob) sizeOutput(...sizeFor(PREVIEW_LONG));
+  updateFrameUI();
+};
 
 /* ---------- Export ---------- */
 const exportBtn = $('#export-btn'), cancelBtn = $('#cancel-btn'), note = $('#export-note');
@@ -983,16 +1052,7 @@ async function startExport() {
   const mime = pickMime($('#ex-format').value);
   if (!mime) { alert('No supported recording format found in this browser.'); return; }
   pause();
-  const res = $('#ex-res').value, a = projectAspect();
-  let w, h;
-  if (res === 'source') {
-    const longest = Math.min(1920, Math.max(...clips.map(c => { const m = media.find(x => x.id === c.mediaId); return Math.max(m.w, m.h); })));
-    [w, h] = a >= 1 ? [longest, longest / a] : [longest * a, longest];
-    w = Math.round(w / 2) * 2; h = Math.round(h / 2) * 2;
-  } else {
-    const short = +res;
-    [w, h] = a >= 1 ? [Math.round(short * a / 2) * 2, short] : [short, Math.round(short / a / 2) * 2];
-  }
+  const [w, h] = exportSize();
   const [rs, re] = $('#ex-range').value === 'window' ? loopRange() : [0, duration()];
   sizeOutput(w, h);
   for (const [, inst] of instances) inst.reset();

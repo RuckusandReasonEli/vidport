@@ -110,10 +110,8 @@
     <aside class="panel">
       <section class="block" id="clip-block">
         <div class="block-head"><div><h2 id="clip-title">No clip selected</h2><p class="muted" id="clip-sub">Add a video to get started.</p></div></div>
-        <details class="group" id="look-group">
-          <summary>Layer look (opacity, blend, position, fades)</summary>
-          <div class="params" id="clip-look"></div>
-        </details>
+        <p id="mask-status" class="track-status" hidden></p>
+        <div id="clip-look"></div>
       </section>
 
       <section class="block" id="fx-block">
@@ -195,15 +193,21 @@
       <section class="block" id="export-block">
         <div class="block-head"><div><h2>Render</h2><p class="muted">Renders in real time with every layer and the mixed audio, then saves it.</p></div></div>
         <div class="export-grid">
-          <label>Frame
+          <label class="frame-field">Frame
             <select id="aspect">
-              <option value="auto">Match first video</option>
+              <option value="auto">From first video</option>
               <option value="1.7778">16:9</option>
               <option value="0.5625">9:16 (Reels)</option>
               <option value="1">1:1</option>
               <option value="0.8">4:5</option>
+              <option value="1.3333">4:3</option>
+              <option value="custom">Custom size...</option>
             </select>
           </label>
+          <div class="custom-size" id="custom-size" hidden>
+            <label>Width <input type="number" id="custom-w" min="16" max="3840" step="2" value="1080"></label>
+            <label>Height <input type="number" id="custom-h" min="16" max="3840" step="2" value="1920"></label>
+          </div>
           <label>Resolution
             <select id="ex-res">
               <option value="source">Source (up to 1920 px)</option>
@@ -232,6 +236,7 @@
             </select>
           </label>
         </div>
+        <p class="muted small" id="frame-note"></p>
         <button class="btn btn-primary btn-block" id="export-btn" disabled>Process &amp; download</button>
         <button class="btn btn-ghost btn-block" id="cancel-btn" hidden>Cancel render</button>
         <p class="muted small" id="export-note"></p>

@@ -11,7 +11,8 @@ const MAX_D = 0.5;                // distances stored up to half the frame heigh
 /* ---------- Body field (cached per renderer and frame) ---------- */
 const DOWN_FS = FS_IO + `uniform sampler2D uSrc; void main() { outColor = vec4(texture(uSrc, vUv).rgb, 1.0); }`;
 
-function bodyField(r, tracker) {
+/** Person mask + distance field for the renderer's current frame (shared with clip masks). */
+export function bodyField(r, tracker) {
   const key = r.frameIndex + '|' + r.time;
   if (r._body && r._body.key === key) return r._body;
   const gw = r.w >= r.h ? GRID : Math.max(16, Math.round(GRID * r.w / r.h));
