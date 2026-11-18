@@ -6,8 +6,7 @@ In-browser video effects. Upload a clip, watch every effect preview live on a 3 
 
 Two tools, switchable from the header:
 
-- **Effects** (`index.html`): one clip through glitch, mosh and feedback effects, with audio-reactive EQ linking.
-- **Layers** (`layers.html`): three tracks of video with split, trim and a separate effect on every clip.
+- **Effects** (`index.html`): the main editor. Use one clip, or stack up to 3 layers of video, split clips, and give every clip its own effect, Global Effects and Video Circuit, with audio-reactive EQ linking. (`layers.html` redirects here.)
 - **Beat Cut** (`cut.html`): up to 5 clips edited together on the beat.
 - **Slice Pause** (`slice.html`): cut one clip into strips and freeze chosen strips on the beat.
 
@@ -68,17 +67,17 @@ A standard grading suite applied to every frame **before** the chosen effect (so
 
 Every slider supports **+EQ** audio linking, and double-clicking a slider resets it. The switch on the effect panel turns the effect off so you can render with Global Effects only; clicking any effect card turns it back on. The Global Effects switch toggles the whole suite for quick before/after comparisons.
 
-## Layers
+## Layers (on the Effects page)
 
-The multi-clip version of Effects.
+With one video the Effects page works as a single-clip editor. Add more and they stack as layers on the timeline. Select a clip, then choose a gallery card to apply that effect to it; the gallery previews show the selected clip, and the panel controls (effect, Global Effects, Video Circuit, layer look) all belong to that clip. Each clip's effect and Global Effects can be switched off on their own. The **3s loop** button loops 3 seconds from the playhead for quick tuning, and can be rendered on its own.
 
 - **Media:** add up to 8 videos. The first three land on layers 1, 2 and 3; later ones extend layer 1. Each media card can add the video to any layer at the playhead.
 - **Timeline:** 3 layers (layer 3 on top). Drag clips to move them, including onto another layer; drag their edges to trim. Clips on a layer can't overlap. Snap lines clips up with each other and the playhead. **Split** (S) cuts the selected clip at the playhead, **Duplicate** (D), **Delete**. Each layer can be hidden or muted.
-- **Per clip:** opacity, blend mode (Normal, Screen, Add, Multiply, Difference, Overlay, Lighten, Darken), fill or fit, scale, position, rotation, fade in and out, volume; any effect from the gallery with its full controls; and the Global Effects adjustments. Splitting keeps all settings, so you can split a clip and give each half a different effect.
+- **Per clip:** opacity, blend mode (Normal, Screen, Add, Multiply, Difference, Overlay, Lighten, Darken), fill or fit, scale, position, rotation, fade in and out, volume; any effect from the gallery with its full controls; the Global Effects adjustments; and a Video Circuit. Splitting keeps all settings, so you can split a clip and give each half a different effect.
 - **Audio:** every clip's sound is mixed; audio reactivity listens to the mix, and every slider has +EQ.
-- **Render:** the whole timeline in real time with the mixed audio, at 480p to 1080p in the chosen frame (match first video, 16:9, 9:16, 1:1, 4:5).
+- **Render:** the whole timeline (or the 3 s loop) in real time with the mixed audio, at 480p to 1080p or source size in the chosen frame (match first video, 16:9, 9:16, 1:1, 4:5).
 
-Browser limits it is designed around: at most 3 videos decode at once (one per layer; a split clip keeps using the same decoder, so cuts within one file are seamless), 8 source files and 40 clips per project. Previews run at 640 px (480 px on phones) while renders use the chosen size. Face, hand and body tracking on several layers takes turns, one layer per frame. Video Circuit stages are available on the Effects page only. Projects are not saved between visits, because browsers can't keep the video files.
+Browser limits it is designed around: at most 3 videos decode at once (one per layer; a split clip keeps using the same decoder, so cuts within one file are seamless), 8 source files and 40 clips per project. Previews run at 640 px (480 px on phones) while renders use the chosen size. Face, hand and body tracking on several layers takes turns, one layer per frame. Projects are not saved between visits, because browsers can't keep the video files.
 
 ## Analog video effects
 
@@ -163,7 +162,7 @@ python3 -m http.server 8000
 ## Project layout
 
 ```
-index.html          Effects tool
+index.html          Effects editor (single clip or 3 layers)
 cut.html            Beat Cut tool
 css/cut.css         Beat Cut styles
 js/cut/main.js      Beat Cut: clips, clock, compositing, timeline, export
@@ -176,12 +175,11 @@ css/style.css       Styles
 js/global.js        Global Effects grading stage
 js/circuit.js       Video Circuit stages (component math, shader, presets)
 js/detect.js        Shared MediaPipe face/hand/pose tracker and body segmenter
-layers.html         Layers tool
-js/layers/main.js   Layers: media, players, timeline editing, per-layer views, compositing, export
-css/layers.css      Layers styles
+layers.html         Redirects to index.html
+js/studio/main.js   Effects editor: media, players, timeline, gallery, per-clip effects / Global / circuit, compositing, export
+css/layers.css      Timeline and media styles
 js/mobile.js        Phone helpers (iOS playback rules, wake lock, audio session)
 vendor/mediapipe/   MediaPipe Tasks Vision 1.2.2 (Apache-2.0)
-js/main.js          App wiring: upload, playback loop, gallery, params, export
 js/gl.js            WebGL2 core: shaders, render targets, ping-pong buffers, shared GLSL
 js/audio.js         Web Audio analysis, EQ bands, transient detection
 js/export.js        MediaRecorder format picking, bitrates, download

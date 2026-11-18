@@ -7,8 +7,10 @@
   <meta name="description" content="Upload a video, preview glitch, mosh and feedback effects, link them to the audio EQ, and render the result. Runs entirely in your browser.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%23ff4fa3%27/%3E%3Crect x=%278%27 y=%278%27 width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%2353f0ff%27/%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/cut.css">
+  <link rel="stylesheet" href="css/layers.css">
 </head>
-<body>
+<body class="cut-page studio-page">
   <header class="topbar">
     <div class="brand">
       <span class="logo" aria-hidden="true"></span>
@@ -19,14 +21,12 @@
     </div>
     <nav class="modes" aria-label="Tools">
       <a href="index.html" class="on" aria-current="page">Effects</a>
-      <a href="layers.html">Layers</a>
       <a href="cut.html">Beat Cut</a>
       <a href="slice.html">Slice Pause</a>
     </nav>
     <div class="top-actions">
-      <span id="file-chip" class="chip" hidden></span>
-      <label class="btn btn-primary" for="file-input">Upload video</label>
-      <input id="file-input" type="file" accept="video/*" hidden>
+      <label class="btn btn-primary" for="file-input">Add videos</label>
+      <input id="file-input" type="file" accept="video/*" multiple hidden>
     </div>
   </header>
 
@@ -38,8 +38,8 @@
           <div class="dz-inner">
             <div class="dz-icon" aria-hidden="true"></div>
             <h2><span class="desk">Drop a video to start</span><span class="touch">Choose a video to start</span></h2>
-            <p>MP4, MOV or WebM. Every effect previews a 3 second loop of your clip. Pick one, tune it, then render the full video.</p>
-            <label class="btn btn-primary" for="file-input">Choose a file</label>
+            <p>MP4, MOV or WebM. Every effect previews live on your clip. Add up to 8 videos to stack them on 3 layers, split clips, and give each clip its own effect.</p>
+            <label class="btn btn-primary" for="file-input">Choose videos</label>
           </div>
         </div>
         <button class="play-overlay" id="play-overlay" hidden>Tap to start preview</button>
@@ -59,19 +59,17 @@
           <svg viewBox="0 0 24 24" class="i-pause"><path d="M7 5h3v14H7zM14 5h3v14h-3z"/></svg>
           <svg viewBox="0 0 24 24" class="i-play"><path d="M8 5l11 7-11 7z"/></svg>
         </button>
-        <div class="window-ctl">
-          <div class="window-labels">
-            <span>Preview window</span>
-            <span id="window-label">0:00 to 0:03</span>
-          </div>
-          <div class="window-track">
-            <input type="range" id="window-start" min="0" max="0" step="0.01" value="0" disabled>
-            <div class="playhead" id="playhead"></div>
-          </div>
+        <div class="timecode" id="timecode">0:00.0 / 0:00.0</div>
+        <div class="seg" role="group" aria-label="Loop">
+          <button class="seg-btn is-on" data-loop="full" title="Loop the whole timeline">Full</button>
+          <button class="seg-btn" data-loop="window" title="Loop 3 seconds from the playhead">3s loop</button>
         </div>
-        <div class="seg" role="group" aria-label="Loop length">
-          <button class="seg-btn is-on" data-loop="window">3s loop</button>
-          <button class="seg-btn" data-loop="full">Full</button>
+        <span class="muted small" id="loop-label"></span>
+        <div class="tools">
+          <button class="btn btn-sm" id="split-btn" title="Split the selected clip at the playhead (S)" disabled>Split</button>
+          <button class="btn btn-sm" id="dup-btn" title="Duplicate the selected clip (D)" disabled>Duplicate</button>
+          <button class="btn btn-sm" id="del-btn" title="Delete the selected clip (Delete)" disabled>Delete</button>
+          <label class="check"><input type="checkbox" id="snap" checked> Snap</label>
         </div>
         <div class="vol">
           <button class="icon-btn" id="mute-btn" title="Mute monitor">
@@ -81,14 +79,43 @@
         </div>
       </div>
 
+      <div class="tl" id="tl">
+        <div class="tl-labels" id="tl-labels"></div>
+        <div class="tl-scroll" id="tl-scroll">
+          <div class="tl-inner" id="tl-inner">
+            <canvas class="tl-ruler" id="tl-ruler" height="26"></canvas>
+            <div class="tl-lanes" id="tl-lanes"></div>
+            <div class="tl-playhead" id="tl-playhead"></div>
+          </div>
+        </div>
+      </div>
+      <div class="tl-foot">
+        <span class="muted small">Tap a clip to select it, drag to move it (across layers too), drag its edges to trim. Layer 3 sits on top.</span>
+        <label class="zoom">Zoom <input type="range" id="zoom" min="10" max="300" step="1" value="60"></label>
+      </div>
+
       <div class="gallery-head">
         <h2>Effects</h2>
-        <p>Live 3 second previews. Choose one to edit. Working with several clips? Use <a href="layers.html" class="inline-link">Layers</a> to stack them and give each its own effect.</p>
+        <p id="gallery-sub">Live previews of the selected clip. Choose one to apply it.</p>
       </div>
       <div class="gallery" id="gallery"></div>
+
+      <div class="gallery-head">
+        <h2>Media</h2>
+        <p id="media-count">Up to 8 videos. Add one to a layer at the playhead.</p>
+      </div>
+      <div class="media" id="media"></div>
     </section>
 
     <aside class="panel">
+      <section class="block" id="clip-block">
+        <div class="block-head"><div><h2 id="clip-title">No clip selected</h2><p class="muted" id="clip-sub">Add a video to get started.</p></div></div>
+        <details class="group" id="look-group">
+          <summary>Layer look (opacity, blend, position, fades)</summary>
+          <div class="params" id="clip-look"></div>
+        </details>
+      </section>
+
       <section class="block" id="fx-block">
         <div class="block-head">
           <div>
@@ -97,12 +124,12 @@
             <p id="track-status" class="track-status" hidden></p>
             <p id="track-note" class="track-note" hidden>Tracking runs on your device with Google MediaPipe. Your video is never uploaded, but the library sends anonymous performance metrics to Google.</p>
           </div>
-          <label class="switch" title="Turn the effect off to use only Global Effects">
+          <label class="switch" title="Turn this clip's effect off to use only Global Effects">
             <input type="checkbox" id="fx-toggle" checked>
             <span class="switch-track"><span class="switch-thumb"></span></span>
           </label>
         </div>
-        <p class="off-note">Effect is off. Renders use only the Global Effects. Click any effect card or flip the switch to turn it back on.</p>
+        <p class="off-note">Effect is off for this clip. Choose any effect card or flip the switch to turn it back on.</p>
         <div class="head-actions fx-actions">
           <button class="btn btn-ghost btn-sm" id="randomize-btn" title="Randomize">Shuffle</button>
           <button class="btn btn-ghost btn-sm" id="reset-btn" title="Reset to defaults">Reset</button>
@@ -114,9 +141,9 @@
         <div class="block-head">
           <div>
             <h2>Global Effects</h2>
-            <p class="muted">Standard adjustments applied to every frame before the effect. Double-click a slider to reset it.</p>
+            <p class="muted">Adjustments for the selected clip, applied before its effect. Double-click a slider to reset it.</p>
           </div>
-          <label class="switch" title="Turn Global Effects on or off">
+          <label class="switch" title="Turn Global Effects on or off for this clip">
             <input type="checkbox" id="global-toggle" checked>
             <span class="switch-track"><span class="switch-thumb"></span></span>
           </label>
@@ -143,10 +170,10 @@
         <div class="block-head">
           <div>
             <h2>Audio reactivity</h2>
-            <p class="muted" id="audio-status">Upload a video to detect audio.</p>
+            <p class="muted" id="audio-status">Listens to the mix of every clip's sound.</p>
           </div>
           <label class="switch" title="Turn audio reactivity on or off">
-            <input type="checkbox" id="audio-toggle" disabled>
+            <input type="checkbox" id="audio-toggle">
             <span class="switch-track"><span class="switch-thumb"></span></span>
           </label>
         </div>
@@ -166,8 +193,17 @@
       </section>
 
       <section class="block" id="export-block">
-        <div class="block-head"><div><h2>Render</h2><p class="muted">Processes in real time, then downloads automatically.</p></div></div>
+        <div class="block-head"><div><h2>Render</h2><p class="muted">Renders in real time with every layer and the mixed audio, then saves it.</p></div></div>
         <div class="export-grid">
+          <label>Frame
+            <select id="aspect">
+              <option value="auto">Match first video</option>
+              <option value="1.7778">16:9</option>
+              <option value="0.5625">9:16 (Reels)</option>
+              <option value="1">1:1</option>
+              <option value="0.8">4:5</option>
+            </select>
+          </label>
           <label>Resolution
             <select id="ex-res">
               <option value="source">Source (up to 1920 px)</option>
@@ -185,8 +221,8 @@
           </label>
           <label>Length
             <select id="ex-range">
-              <option value="full" selected>Full video</option>
-              <option value="window">Preview window only</option>
+              <option value="full" selected>Whole timeline</option>
+              <option value="window">3 s loop only</option>
             </select>
           </label>
           <label>Format
@@ -204,8 +240,7 @@
     </aside>
   </main>
 
-  <video id="video" playsinline preload="auto"></video>
   <a class="render-jump" id="render-jump" href="#export-block" hidden>Render</a>
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/studio/main.js"></script>
 </body>
 </html>

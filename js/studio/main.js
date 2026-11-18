@@ -1,6 +1,7 @@
 import { Renderer, FS_IO } from '../gl.js';
 import { EFFECTS } from '../effects/index.js';
-import { GLOBAL, Grader } from '../global.js';
+import { GLOBAL, Grader, isNeutral } from '../global.js';
+import { CIRCUIT_TYPES, CIRCUIT_PRESETS, MAX_STAGES, circuitType } from '../circuit.js';
 import { AudioEngine, BANDS } from '../audio.js';
 import { Tracker } from '../detect.js';
 import { pickMime, bitrateFor, presentResult } from '../export.js';
@@ -12,6 +13,8 @@ import { IS_IOS, IS_MOBILE, keepAwake, waitForMetadata, usePlaybackAudioSession 
 const TRACKS = 3, MAX_MEDIA = 8, MAX_CLIPS = 40;
 const LAYER_COLORS = ['#53f0ff', '#ff4fa3', '#ffb14f'];
 const PREVIEW_LONG = IS_MOBILE ? 480 : 640;
+const GALLERY_LONG = IS_MOBILE ? 240 : 400;
+const WINDOW = 3;
 const BLENDS = ['Normal', 'Screen', 'Add', 'Multiply', 'Difference', 'Overlay', 'Lighten', 'Darken'];
 
 const $ = s => document.querySelector(s);
@@ -30,6 +33,8 @@ let selectedId = null, nextId = 1;
 let t = 0, playing = false, t0 = 0, base = 0, wantPlay = false;
 let pxPerSec = 60, exportJob = null, lastDownload = null, audioOn = false, dirty = true;
 let aspectSetting = 'auto';
+let loopMode = 'full', loopA = 0;
+const loopRange = () => (loopMode === 'window' ? [loopA, Math.min(duration(), loopA + WINDOW)] : [0, duration()]);
 const duration = () => Math.max(0, ...clips.map(c => c.start + (c.out - c.in)));
 const clipEnd = c => c.start + (c.out - c.in);
 const selected = () => clips.find(c => c.id === selectedId) || null;
@@ -53,9 +58,19 @@ const defaults = def => {
   return { values, mods };
 };
 function newClip(m, track, start) {
-  return { id: nextId++, mediaId: m.id, track, start, in: 0, out: m.duration, effect: 'none', fx: {}, look: defaults(LOOK), global: defaults(GLOBAL) };
+  return { id: nextId++, mediaId: m.id, track, start, in: 0, out: m.duration, effect: 'none', fxOn: true, fx: {}, look: defaults(LOOK), global: defaults(GLOBAL), globalOn: true, circuit: [] };
 }
 const fxState = (c, id) => (c.fx[id] = c.fx[id] || defaults(getFx(id)));
+/** The effect that actually runs on a clip (null when none is chosen or it's switched off). */
+const fxOf = c => (c && c.fxOn && c.effect !== 'none' ? getFx(c.effect) : null);
+/** Video Circuit stages are stored per clip as { uid, typeId, st, bypass } so clips can be copied. */
+const stageDef = s => { const ty = circuitType(s.typeId); return { id: 'circ' + s.uid, name: ty.name, params: ty.params }; };
+function clipGlobal(c) {
+  if (!c.globalOn) return null;
+  const gp = resolve(GLOBAL, c.global);
+  gp.circuit = c.circuit.filter(s => !s.bypass).map(s => ({ type: s.typeId, p: resolve(stageDef(s), s.st) }));
+  return gp;
+}
 
 /* ---------- Audio ---------- */
 const audio = new AudioEngine();
@@ -94,10 +109,10 @@ function player(track, mediaId) {
   Object.assign(v, { playsInline: true, preload: 'auto', src: m.url });
   v.setAttribute('playsinline', '');
   videoBox.appendChild(v);
-  const p = { key, track, mediaId, video: v, fresh: false, gain: null, lastGain: 0 };
-  if ('requestVideoFrameCallback' in v) { const cb = () => { p.fresh = true; v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); }
-  else p.lastT = -1;
-  v.addEventListener('seeked', () => { p.fresh = true; dirty = true; });
+  const p = { key, track, mediaId, video: v, fresh: false, galFresh: false, gain: null, lastGain: 0 };
+  if ('requestVideoFrameCallback' in v) { const cb = () => { p.fresh = p.galFresh = true; v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); }
+  else { p.lastT = -1; p.galLastT = -1; }
+  v.addEventListener('seeked', () => { p.fresh = p.galFresh = true; dirty = true; });
   attachPlayerAudio(p);
   players.set(key, p);
   return p;
@@ -109,7 +124,7 @@ function setGain(p, g) {
 }
 
 /* ---------- GL: composite canvas + one view per layer ---------- */
-const canvas = $('#layers-canvas');
+const canvas = $('#main-canvas');
 const R = new Renderer(canvas, { preserve: IS_IOS });
 const COMP_FS = FS_IO + /* glsl */ `
 uniform sampler2D uAccum, uLayer;
@@ -214,7 +229,7 @@ function fadeAt(c, look, time) {
   return clamp(f, 0, 1);
 }
 
-function neededKinds(c) { const fx = c && c.effect !== 'none' ? getFx(c.effect) : null; return fx && fx.needs ? fx.needs(resolve(fx, fxState(c, fx.id))) : []; }
+function neededKinds(c) { const fx = fxOf(c); return fx && fx.needs ? fx.needs(resolve(fx, fxState(c, fx.id))) : []; }
 function mapTrack(raw, gp) {
   const flip = gp ? Math.round(gp.flip) : 0, z = gp ? gp.zoom : 1;
   const map = (l, vis) => { let x = (l.x - 0.5) * z + 0.5, y = (1 - l.y - 0.5) * z + 0.5; if (flip === 1 || flip === 3) x = 1 - x; if (flip === 2 || flip === 3) y = 1 - y; return { x, y, v: vis ? l.visibility : 1 }; };
@@ -235,7 +250,7 @@ function renderTrack(k, time, force) {
     const s = Math.min(1, Math.max(R.w, R.h) / Math.max(m.w, m.h));
     view.resize(Math.max(2, Math.round(m.w * s / 2) * 2), Math.max(2, Math.round(m.h * s / 2) * 2));
     view.hasFrame = false;
-    const inst = c.effect !== 'none' ? instances.get(`${c.id}|${k}|${c.effect}`) : null;
+    const inst = fxOf(c) ? instances.get(`${c.id}|${k}|${c.effect}`) : null;
     if (inst) inst.reset();
     ts.clipId = c.id;
     step = true;
@@ -243,12 +258,11 @@ function renderTrack(k, time, force) {
   if (p.fresh || (p.lastT !== undefined && v.currentTime !== p.lastT)) { step = true; p.fresh = false; p.lastT = v.currentTime; }
   if (!step && !force && ts.tex) return;
   const mt = c.in + (time - c.start);
-  const gp = resolve(GLOBAL, c.global);
-  gp.circuit = [];
+  const gp = clipGlobal(c);
   view.time = mt; view.frameIndex = ++ts.frame; view.gradeParams = gp;
   if (step || !view.hasFrame) view.upload(v, v.videoWidth, v.videoHeight); else view.regrade();
-  if (c.effect === 'none') { ts.tex = view.cur; return; }
-  const fx = getFx(c.effect);
+  const fx = fxOf(c);
+  if (!fx) { ts.tex = view.cur; return; }
   const key = `${c.id}|${k}|${fx.id}`;
   if (!instances.has(key)) instances.set(key, fx.create(view));
   const kinds = neededKinds(c);
@@ -260,7 +274,7 @@ function renderTrack(k, time, force) {
   }
   instances.get(key).render(resolve(fx, fxState(c, fx.id)), {
     step, time: mt, frame: ts.frame, dt: 1 / 30, tracker, track: ts.track, hit: audioOn ? audio.levels.hit : 0,
-    srcW: v.videoWidth / gp.zoom, srcH: v.videoHeight / gp.zoom,
+    srcW: v.videoWidth / (gp ? gp.zoom : 1), srcH: v.videoHeight / (gp ? gp.zoom : 1),
   }, null);
   ts.tex = view.out;
 }
@@ -312,7 +326,7 @@ function play() {
   if (!clips.length) return;
   ensureAudio();
   unlockPlayers();
-  if (t >= duration() - 0.05) setTime(0);
+  { const [a, b] = loopRange(); if (!exportJob && (t >= b - 0.05 || t < a)) setTime(a); }
   base = t; t0 = performance.now(); playing = true; wantPlay = true;
   syncPlayers(t);
   syncPlayBtn();
@@ -330,10 +344,10 @@ function tick() {
   if (!exportJob) audio.update(1 / 60);
   if (playing) {
     t = now();
-    const d = duration();
-    if (t >= d) {
+    const [a, b] = exportJob ? [exportJob.start, exportJob.end] : loopRange();
+    if (t >= b) {
       if (exportJob) { finishExport(false); return; }
-      setTime(0); t = 0;
+      setTime(a); t = a;
     }
   } else t = base;
   syncPlayers(t);
@@ -343,6 +357,7 @@ function tick() {
   trackTurnK = needT.length ? needT[frameNo % needT.length] : -1;
   for (let k = 0; k < TRACKS; k++) renderTrack(k, t, dirty);
   composite(t);
+  renderGallery();
   dirty = false;
   updateMeters();
   $('#timecode').textContent = `${fmt(t)} / ${fmt(duration())}`;
@@ -353,7 +368,7 @@ function tick() {
 requestAnimationFrame(tick);
 
 /* ---------- Media ---------- */
-$('#media-input').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+$('#file-input').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 ['dragenter', 'dragover'].forEach(x => document.addEventListener(x, e => { e.preventDefault(); $('#dropzone').classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(x => document.addEventListener(x, e => { e.preventDefault(); $('#dropzone').classList.remove('drag'); }));
 document.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
@@ -383,10 +398,7 @@ async function addFiles(files) {
     }
   }
   afterMediaChange();
-  if (media.length && !playing) {
-    // Muted-safe start so previews show immediately; sound unlocks on the first tap.
-    $('#play-overlay').hidden = false;
-  }
+  if (clips.length && !playing) play();   // falls back to muted playback (Tap for sound) if the browser blocks sound
 }
 function makeThumb(m, probe) {
   const draw = () => {
@@ -412,6 +424,7 @@ function afterMediaChange() {
   $('#render-jump').hidden = !clips.length;
   if (!exportJob) sizeOutput(...sizeFor(PREVIEW_LONG));
   renderMedia(); renderTimeline(); renderInspector();
+  galKey = '';
   $('#media-count').textContent = `${media.length} of ${MAX_MEDIA} videos. Add one to a layer at the playhead.`;
 }
 function renderMedia() {
@@ -465,6 +478,7 @@ function renderLabels() {
 }
 function renderTimeline() {
   const width = Math.max(scrollEl.clientWidth, (duration() + 10) * pxPerSec);
+  updateLoopLabel();
   inner.style.width = width + 'px';
   lanesEl.innerHTML = '';
   for (let k = TRACKS - 1; k >= 0; k--) {
@@ -479,7 +493,7 @@ function renderTimeline() {
       el.style.setProperty('--lc', LAYER_COLORS[k]);
       el.style.left = c.start * pxPerSec + 'px';
       el.style.width = Math.max(6, (c.out - c.in) * pxPerSec) + 'px';
-      el.innerHTML = `<span class="h l"></span><span class="cn">${m ? m.name : '?'}</span><span class="cf">${c.effect === 'none' ? 'No effect' : getFx(c.effect).name}${resolve(LOOK, c.look).blend ? ' · ' + BLENDS[c.look.values.blend] : ''}</span><span class="h r"></span>`;
+      el.innerHTML = `<span class="h l"></span><span class="cn">${m ? m.name : '?'}</span><span class="cf">${fxOf(c) ? fxOf(c).name : c.effect !== 'none' ? getFx(c.effect).name + ' (off)' : 'No effect'}${resolve(LOOK, c.look).blend ? ' · ' + BLENDS[c.look.values.blend] : ''}</span><span class="h r"></span>`;
       el.addEventListener('pointerdown', e => startDrag(e, c, el));
       lane.appendChild(el);
     }
@@ -507,6 +521,7 @@ function drawRuler(width) {
 function seekFromEvent(e) {
   const rect = inner.getBoundingClientRect();
   setTime((e.clientX - rect.left) / pxPerSec);
+  if (loopMode === 'window') { loopA = t; updateLoopLabel(); }
 }
 ruler.addEventListener('pointerdown', e => {
   if (exportJob) return;
@@ -645,6 +660,7 @@ function buildControls(container, def, st, grouped) {
       group = p.group;
       const det = document.createElement('details');
       det.className = 'group';
+      det.open = group === 'Light';
       det.innerHTML = `<summary>${group}</summary><div class="params"></div>`;
       container.appendChild(det);
       parent = det.querySelector('.params');
@@ -695,46 +711,238 @@ function buildControls(container, def, st, grouped) {
 }
 function changed(def) {
   dirty = true;
-  if (def === LOOK) { const c = selected(); if (c) renderTimeline(); }
-  if (def !== LOOK && def !== GLOBAL) updateTrackStatus();
+  if (def === LOOK) renderTimeline();
+  else if (def === GLOBAL) updateBadge();
+  else if (def.id && def.id.startsWith('circ')) updateCircuitReadouts();
+  else updateTrackStatus();
 }
-const fxSel = $('#clip-effect');
-fxSel.innerHTML = '<option value="none">No effect (clean layer)</option>' + EFFECTS.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
-fxSel.onchange = () => {
-  const c = selected();
-  if (!c) return;
-  c.effect = fxSel.value;
-  trackState.forEach(ts => { if (ts.clipId === c.id) ts.clipId = null; });
-  renderInspector(); renderTimeline();
-};
 function select(id, rerender = true) {
   selectedId = id;
+  const c = selected();
+  if (c && (t < c.start || t >= clipEnd(c)) && !exportJob) { setTime(c.start); if (loopMode === 'window') loopA = c.start; }
   if (rerender) renderTimeline();
   else { document.querySelectorAll('.clip').forEach(el => el.classList.toggle('selected', +el.dataset.id === id)); updateToolButtons(); }
   renderInspector();
 }
 function renderInspector() {
   const c = selected();
-  $('#clip-body').hidden = !c;
-  $('#clip-block').classList.toggle('empty', !c);
-  if (!c) { $('#clip-title').textContent = 'No clip selected'; $('#clip-sub').textContent = clips.length ? 'Tap a clip on the timeline to edit it.' : 'Add videos to get started.'; return; }
-  const m = media.find(x => x.id === c.mediaId);
-  $('#clip-title').textContent = `Layer ${c.track + 1}: ${m.name}`;
-  $('#clip-sub').textContent = `${fmt(c.start)} to ${fmt(clipEnd(c))} on the timeline, using ${fmt(c.in)} to ${fmt(c.out)} of the source.`;
-  buildControls($('#clip-look'), LOOK, c.look, false);
-  fxSel.value = c.effect;
-  const fx = c.effect === 'none' ? null : getFx(c.effect);
-  if (fx) buildControls($('#clip-fx'), fx, fxState(c, fx.id), false); else $('#clip-fx').innerHTML = '';
-  buildControls($('#clip-global'), GLOBAL, c.global, true);
+  const m = c ? media.find(x => x.id === c.mediaId) : null;
+  $('#clip-title').textContent = c ? (clips.length > 1 ? `Layer ${c.track + 1}: ${m.name}` : m.name) : 'No clip selected';
+  $('#clip-sub').textContent = c ? `${fmt(c.start)} to ${fmt(clipEnd(c))} on the timeline, using ${fmt(c.in)} to ${fmt(c.out)} of the source.`
+    : clips.length ? 'Tap a clip on the timeline to edit it.' : 'Add a video to get started.';
+  $('#look-group').hidden = !c;
+  if (c) buildControls($('#clip-look'), LOOK, c.look, false);
+  const fx = c && c.effect !== 'none' ? getFx(c.effect) : null;
+  $('#fx-name').textContent = fx ? fx.name : 'Effect';
+  $('#fx-desc').textContent = fx ? fx.description : c ? 'No effect on this clip yet. Choose a card in the gallery to apply one.' : 'Select a clip, then choose an effect card.';
+  $('#fx-toggle').checked = !!(c && fx && c.fxOn);
+  $('#fx-toggle').disabled = !fx;
+  $('#fx-block').classList.toggle('is-off', !!(fx && !c.fxOn));
+  $('#randomize-btn').disabled = $('#reset-btn').disabled = !fx;
+  if (fx) buildControls($('#params'), fx, fxState(c, fx.id), false); else $('#params').innerHTML = '';
+  $('#global-toggle').checked = !c || c.globalOn;
+  $('#global-toggle').disabled = !c;
+  $('#global-block').classList.toggle('is-off', !!(c && !c.globalOn));
+  if (c) buildControls($('#global-params'), GLOBAL, c.global, true); else $('#global-params').innerHTML = '';
+  renderCircuit();
+  refreshCards();
   updateTrackStatus();
+  updateBadge();
 }
 function updateTrackStatus() {
   const c = selected();
   const kinds = neededKinds(c);
-  const el = $('#track-status');
-  el.hidden = !kinds.length;
-  el.textContent = kinds.length ? tracker.statusText(kinds) : '';
+  $('#track-status').hidden = $('#track-note').hidden = !kinds.length;
+  $('#track-status').textContent = kinds.length ? tracker.statusText(kinds) : '';
 }
+function updateBadge() {
+  const c = selected();
+  const layers = new Set(clips.map(x => x.track)).size;
+  const g = c && c.globalOn && !isNeutral(clipGlobal(c));
+  $('#effect-badge').textContent = !c ? (clips.length ? `${layers} layer${layers === 1 ? '' : 's'}` : '')
+    : `${fxOf(c) ? fxOf(c).name : g ? 'Global Effects' : 'Original'}${fxOf(c) && g ? ' + Global' : ''}${layers > 1 ? ` · layer ${c.track + 1} of ${layers}` : ''}`;
+}
+function resetClipInstances(c) { trackState.forEach(ts => { if (ts.clipId === c.id) ts.clipId = null; }); dirty = true; }
+
+/* Effect switch, shuffle, reset */
+$('#fx-toggle').onchange = e => { const c = selected(); if (!c) return; c.fxOn = e.target.checked; resetClipInstances(c); renderInspector(); renderTimeline(); };
+$('#global-toggle').onchange = e => { const c = selected(); if (!c) return; c.globalOn = e.target.checked; dirty = true; renderInspector(); };
+$('#reset-btn').onclick = () => { const c = selected(); if (!c || c.effect === 'none') return; c.fx[c.effect] = defaults(getFx(c.effect)); renderInspector(); dirty = true; };
+$('#randomize-btn').onclick = () => {
+  const c = selected(); if (!c || c.effect === 'none') return;
+  const fx = getFx(c.effect), st = fxState(c, fx.id);
+  for (const q of fx.params) {
+    if (q.type === 'color') continue;
+    if (!isRange(q)) { st.values[q.id] = Math.floor(Math.random() * q.options.length); continue; }
+    const v = q.value + (Math.random() * 2 - 1) * (q.max - q.min) * 0.5;
+    st.values[q.id] = +(Math.round(clamp(v, q.min, q.max) / q.step) * q.step).toFixed(4);
+  }
+  renderInspector(); dirty = true;
+};
+$('#global-reset').onclick = () => { const c = selected(); if (!c) return; c.global = defaults(GLOBAL); c.circuit = []; renderInspector(); dirty = true; };
+
+/* ---------- Gallery: live previews of the selected clip ---------- */
+const gallery = $('#gallery');
+const galR = new Renderer(document.createElement('canvas'));
+galR.grader = new Grader(galR);
+const galInst = new Map(), cards = new Map();
+let galleryVisible = true, galKey = '';
+for (const fx of EFFECTS) {
+  const el = document.createElement('button');
+  el.className = 'fx-card';
+  el.dataset.id = fx.id;
+  el.style.setProperty('--c1', fx.swatch[0]);
+  el.style.setProperty('--c2', fx.swatch[1]);
+  el.innerHTML = `<canvas></canvas><div class="fx-meta"><h3>${fx.name}</h3><p>${fx.description}</p></div>`;
+  el.onclick = () => applyEffect(fx.id);
+  gallery.appendChild(el);
+  const cv = el.querySelector('canvas');
+  cards.set(fx.id, { el, canvas: cv, ctx2d: cv.getContext('2d') });
+}
+new IntersectionObserver(es => { galleryVisible = es[0].isIntersecting; }, { threshold: 0.01 }).observe(gallery);
+// Only cards on screen render (16+ live effects is a lot of GPU work).
+const cardIO = new IntersectionObserver(es => { for (const e of es) e.target.dataset.onscreen = e.isIntersecting ? '1' : ''; }, { rootMargin: '120px' });
+for (const c of cards.values()) { c.el.dataset.onscreen = '1'; cardIO.observe(c.el); }
+function galleryClip() {
+  const c = selected();
+  if (c) return c;
+  for (let k = TRACKS - 1; k >= 0; k--) { const a = activeClip(k, t); if (a) return a; }
+  return null;
+}
+function refreshCards() {
+  const c = selected();
+  for (const [id, card] of cards) card.el.classList.toggle('is-selected', !!(c && c.fxOn && c.effect === id));
+  const g = galleryClip();
+  $('#gallery-sub').textContent = g ? `Live previews of ${clips.length > 1 ? `layer ${g.track + 1} (${media.find(x => x.id === g.mediaId).name})` : 'your clip'}. Choose one to apply it.` : 'Live previews of the selected clip. Choose one to apply it.';
+}
+function applyEffect(id) {
+  if (exportJob) return;
+  const c = selected() || galleryClip();
+  if (!c) return;
+  c.effect = id; c.fxOn = true;
+  resetClipInstances(c);
+  selectedId = c.id;
+  renderTimeline(); renderInspector();
+}
+function renderGallery() {
+  if (!galleryVisible || exportJob) return;
+  const c = galleryClip();
+  if (!c) return;
+  const p = player(c.track, c.mediaId), v = p.video;
+  if (v.readyState < 2) return;
+  const key = c.id + '|' + c.track;
+  let step = false;
+  if (key !== galKey) {
+    const m = media.find(x => x.id === c.mediaId);
+    const sc = Math.min(1, GALLERY_LONG / Math.max(m.w, m.h));
+    galR.resize(Math.max(2, Math.round(m.w * sc / 2) * 2), Math.max(2, Math.round(m.h * sc / 2) * 2));
+    for (const card of cards.values()) { card.canvas.width = galR.w; card.canvas.height = galR.h; card.el.classList.add('live'); }
+    for (const inst of galInst.values()) inst.reset();
+    galKey = key; step = true;
+  }
+  const fresh = p.galFresh || (p.galLastT !== undefined && v.currentTime !== p.galLastT);
+  if (fresh && IS_MOBILE && frameNo % 2 && galR.hasFrame) return;   // phones: half rate
+  if (fresh) { step = true; p.galFresh = false; p.galLastT = v.currentTime; }
+  if (!step && !dirty) return;
+  const mt = clamp(c.in + (t - c.start), c.in, c.out);
+  galR.time = mt; galR.frameIndex = frameNo; galR.gradeParams = clipGlobal(c);
+  if (step || !galR.hasFrame) galR.upload(v, v.videoWidth, v.videoHeight); else galR.regrade();
+  const ts = trackState[c.track];
+  const track = ts.clipId === c.id ? ts.track : { faces: [], hands: [], poses: [], fresh: false };
+  const gp = galR.gradeParams;
+  for (const fx of EFFECTS) {
+    const card = cards.get(fx.id);
+    if (!card.el.dataset.onscreen) continue;
+    if (!galInst.has(fx.id)) galInst.set(fx.id, fx.create(galR));
+    galInst.get(fx.id).render(resolve(fx, fxState(c, fx.id)), {
+      step, time: mt, frame: frameNo, dt: 1 / 30, tracker, track, hit: audioOn ? audio.levels.hit : 0,
+      srcW: v.videoWidth / (gp ? gp.zoom : 1), srcH: v.videoHeight / (gp ? gp.zoom : 1),
+    }, null);
+    card.ctx2d.drawImage(galR.canvas, 0, 0);
+  }
+}
+
+/* ---------- Video Circuit (per clip, inside Global Effects) ---------- */
+let circUid = 1;
+function addStage(c, typeId, overrides = {}) {
+  if (c.circuit.length >= MAX_STAGES) return;
+  const st = { uid: circUid++, typeId, st: null, bypass: false };
+  st.st = defaults(stageDef(st));
+  Object.assign(st.st.values, overrides);
+  c.circuit.push(st);
+}
+function updateCircuitReadouts() {
+  const c = selected();
+  if (!c) return;
+  for (const st of c.circuit) {
+    const el = document.querySelector(`[data-stage="${st.uid}"] .readout`);
+    if (el) el.textContent = circuitType(st.typeId).derive(st.st.values, 960).info;
+  }
+}
+function renderCircuit() {
+  const c = selected();
+  const box = $('#circuit-stages'), chain = $('#circuit-chain');
+  box.innerHTML = '';
+  $('#circuit-group').hidden = !c;
+  if (!c) return;
+  c.circuit.forEach((st, i) => {
+    const ty = circuitType(st.typeId);
+    const card = document.createElement('div');
+    card.className = 'stage' + (st.bypass ? ' bypassed' : '');
+    card.dataset.stage = st.uid;
+    card.innerHTML = `
+      <div class="stage-head">
+        <div><b>${i + 1}. ${ty.name}</b><span class="readout"></span></div>
+        <div class="stage-btns">
+          <button data-a="up" title="Move earlier" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button data-a="down" title="Move later" ${i === c.circuit.length - 1 ? 'disabled' : ''}>↓</button>
+          <button data-a="bypass" title="Bypass this stage">${st.bypass ? 'Off' : 'On'}</button>
+          <button data-a="remove" title="Remove this stage">✕</button>
+        </div>
+      </div>
+      <p class="stage-about">${ty.about}</p>
+      <div class="params"></div>`;
+    card.querySelector('.stage-btns').addEventListener('click', e => {
+      const a = e.target.dataset.a;
+      if (!a) return;
+      if (a === 'remove') c.circuit.splice(i, 1);
+      else if (a === 'bypass') st.bypass = !st.bypass;
+      else { const j = a === 'up' ? i - 1 : i + 1; [c.circuit[i], c.circuit[j]] = [c.circuit[j], c.circuit[i]]; }
+      renderCircuit(); updateBadge(); dirty = true;
+    });
+    buildControls(card.querySelector('.params'), stageDef(st), st.st, false);
+    box.appendChild(card);
+  });
+  chain.innerHTML = ['<span class="node io">IN</span>', ...c.circuit.map(st => `<span class="node${st.bypass ? ' off' : ''}">${circuitType(st.typeId).chip}</span>`), '<span class="node io">OUT</span>'].join('<span class="wire"></span>');
+  $('#circuit-count').textContent = c.circuit.length ? `${c.circuit.length} stage${c.circuit.length === 1 ? '' : 's'}` : '';
+  $('#circuit-add').disabled = c.circuit.length >= MAX_STAGES;
+  updateCircuitReadouts();
+}
+$('#circuit-add-type').innerHTML = CIRCUIT_TYPES.map(ty => `<option value="${ty.id}">${ty.name}</option>`).join('');
+$('#circuit-add').onclick = () => { const c = selected(); if (!c) return; addStage(c, $('#circuit-add-type').value); renderCircuit(); updateBadge(); dirty = true; };
+$('#circuit-preset').innerHTML = '<option value="">Load a preset circuit...</option>' + CIRCUIT_PRESETS.map((pr, i) => `<option value="${i}">${pr.name}</option>`).join('');
+$('#circuit-preset').onchange = e => {
+  const c = selected(), pr = CIRCUIT_PRESETS[e.target.value];
+  e.target.value = '';
+  if (!c || !pr) return;
+  c.circuit = [];
+  pr.stages.forEach(([id, o]) => addStage(c, id, o));
+  renderCircuit(); updateBadge(); dirty = true;
+};
+$('#circuit-clear').onclick = () => { const c = selected(); if (!c) return; c.circuit = []; renderCircuit(); updateBadge(); dirty = true; };
+
+/* ---------- Loop ---------- */
+function updateLoopLabel() {
+  const [a, b] = loopRange();
+  $('#loop-label').textContent = loopMode === 'window' && clips.length ? `${fmt(a)} to ${fmt(b)}` : '';
+}
+document.querySelectorAll('#transport .seg-btn').forEach(b => b.onclick = () => {
+  loopMode = b.dataset.loop;
+  if (loopMode === 'window') loopA = clamp(t, 0, Math.max(0, duration() - WINDOW));
+  document.querySelectorAll('#transport .seg-btn').forEach(x => x.classList.toggle('is-on', x === b));
+  updateLoopLabel();
+  if (loopMode === 'window' && (t < loopA || t > loopA + WINDOW)) setTime(loopA);
+});
 
 /* ---------- Audio UI ---------- */
 const eqEl = $('#eq'), eqFills = {};
@@ -755,6 +963,11 @@ function applyVolume() { if (monitor) monitor.gain.value = muted ? 0 : +volIn.va
 volIn.oninput = () => { muted = false; applyVolume(); };
 muteBtn.onclick = () => { muted = !muted; applyVolume(); };
 setFill(volIn);
+const rangeIn = $('#audio-range'), smoothIn = $('#audio-smooth');
+rangeIn.oninput = () => { audio.range = +rangeIn.value; $('#audio-range-val').textContent = rangeIn.value + ' dB'; setFill(rangeIn); };
+smoothIn.oninput = () => { audio.smoothing = +smoothIn.value; $('#audio-smooth-val').textContent = Math.round(smoothIn.value * 100) + '%'; setFill(smoothIn); };
+$('#audio-agc').onchange = e => { audio.autoGain = e.target.checked; audio.peak = {}; };
+setFill(rangeIn); setFill(smoothIn);
 $('#aspect').onchange = e => { aspectSetting = e.target.value; if (!exportJob) sizeOutput(...sizeFor(PREVIEW_LONG)); };
 
 /* ---------- Export ---------- */
@@ -770,12 +983,21 @@ async function startExport() {
   const mime = pickMime($('#ex-format').value);
   if (!mime) { alert('No supported recording format found in this browser.'); return; }
   pause();
-  const short = +$('#ex-res').value, a = projectAspect();
-  const [w, h] = a >= 1 ? [Math.round(short * a / 2) * 2, short] : [short, Math.round(short / a / 2) * 2];
+  const res = $('#ex-res').value, a = projectAspect();
+  let w, h;
+  if (res === 'source') {
+    const longest = Math.min(1920, Math.max(...clips.map(c => { const m = media.find(x => x.id === c.mediaId); return Math.max(m.w, m.h); })));
+    [w, h] = a >= 1 ? [longest, longest / a] : [longest * a, longest];
+    w = Math.round(w / 2) * 2; h = Math.round(h / 2) * 2;
+  } else {
+    const short = +res;
+    [w, h] = a >= 1 ? [Math.round(short * a / 2) * 2, short] : [short, Math.round(short / a / 2) * 2];
+  }
+  const [rs, re] = $('#ex-range').value === 'window' ? loopRange() : [0, duration()];
   sizeOutput(w, h);
   for (const [, inst] of instances) inst.reset();
-  setTime(0);
-  syncPlayers(0);
+  setTime(rs);
+  syncPlayers(rs);
   await new Promise(res => setTimeout(res, 600));   // let every layer land on its first frame
   let stream = canvas.captureStream(0);
   let vtrack = stream.getVideoTracks()[0];
@@ -785,11 +1007,12 @@ async function startExport() {
   const chunks = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise(res => { rec.onstop = res; });
-  exportJob = { rec, chunks, stopped, vtrack, manual, w, h, mime, end: duration(), lastFrame: -1, finishing: false };
+  exportJob = { rec, chunks, stopped, vtrack, manual, w, h, mime, start: rs, end: re, lastFrame: -1, finishing: false };
   keepAwake().then(lock => { if (exportJob) exportJob.wake = lock; else if (lock) lock.release(); });
   document.body.classList.add('exporting');
   exportBtn.hidden = true; cancelBtn.hidden = false;
   $('#render-overlay').hidden = false; $('#result').hidden = true;
+  wantPlayAfter = true;
   note.textContent = `${w}x${h}, ${mime.split(';')[0].replace('video/', '').toUpperCase()}, ${clips.length} clip${clips.length === 1 ? '' : 's'} on ${new Set(clips.map(c => c.track)).size} layer(s).`;
   rec.start(1000);
   play();
@@ -797,13 +1020,14 @@ async function startExport() {
 function exportTick(time) {
   const job = exportJob;
   if (job.manual && time - job.lastFrame >= 1 / 30 - 0.004) { job.vtrack.requestFrame(); job.lastFrame = time; }
-  const pct = clamp(time / Math.max(0.01, job.end), 0, 1);
+  const pct = clamp((time - job.start) / Math.max(0.01, job.end - job.start), 0, 1);
   $('#render-fill').style.width = (pct * 100).toFixed(1) + '%';
   $('#render-pct').textContent = Math.round(pct * 100) + '%';
   $('#render-sub').textContent = `${fmt(job.end - time)} left. Keep this tab visible while it renders.`;
   exportBtn.textContent = `Rendering ${Math.round(pct * 100)}%`;
   if (time >= job.end - 0.02) finishExport(false);
 }
+let wantPlayAfter = false;
 async function finishExport(cancelled) {
   const job = exportJob;
   if (!job || job.finishing) return;
@@ -822,13 +1046,16 @@ async function finishExport(cancelled) {
   $('#render-overlay').hidden = true;
   if (!cancelled && job.chunks.length) {
     const type = job.mime.split(';')[0];
-    const name = `layers_${job.w}x${job.h}.${type.includes('mp4') ? 'mp4' : 'webm'}`;
+    const one = clips.length === 1 ? clips[0] : null;
+    const stem = one ? media.find(x => x.id === one.mediaId).name.replace(/\.[^.]+$/, '') + '_' + (fxOf(one) ? one.effect : 'global') : 'vidport';
+    const name = `${stem}_${job.w}x${job.h}.${type.includes('mp4') ? 'mp4' : 'webm'}`;
     if (lastDownload) URL.revokeObjectURL(lastDownload);
     lastDownload = presentResult(new Blob(job.chunks, { type }), name, $('#result'));
     note.textContent = IS_IOS ? `Ready: ${name}. Tap ${$('#result button') ? 'Save video' : 'Download'} to keep it.` : `Saved ${name}.`;
   } else note.textContent = cancelled ? 'Render cancelled.' : 'Nothing was recorded. Try again with the tab in the foreground.';
   sizeOutput(...sizeFor(PREVIEW_LONG));
-  setTime(0);
+  setTime(loopRange()[0]);
+  if (wantPlayAfter) play();
 }
 
 /* ---------- Boot ---------- */
